@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.config import get_settings
@@ -5,6 +7,7 @@ from app.schemas import ImageItem, ImageList, SkuDeleted, SkuInfo, SkuList, SkuP
 from app.storage import s3_client, sku_prefix
 
 router = APIRouter(prefix="/skus", tags=["skus"])
+log = logging.getLogger("upload-api")
 
 
 def _list_objects(prefix: str) -> list[dict]:
@@ -17,11 +20,13 @@ def _list_objects(prefix: str) -> list[dict]:
 
 def _view_url(key: str) -> str:
     s = get_settings()
-    return s3_client().generate_presigned_url(
+    url = s3_client().generate_presigned_url(
         "get_object",
         Params={"Bucket": s.s3_bucket, "Key": key},
         ExpiresIn=s.view_url_expires,
     )
+    log.info("Image URL for key=%s: %s", key, url)
+    return url
 
 
 @router.get("", response_model=SkuList)

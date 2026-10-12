@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from app.schemas import ImageItem, SkuPath
 from app.storage import s3_client, sku_prefix
 
 router = APIRouter(prefix="/skus", tags=["images"])
+log = logging.getLogger("upload-api")
 
 # Detect the real image type from the file's first bytes, not the name or header.
 SIGNATURES = {
@@ -62,6 +64,8 @@ async def upload_image(sku: SkuPath, file: UploadFile = File(..., description="J
         Params={"Bucket": s.s3_bucket, "Key": key},
         ExpiresIn=s.view_url_expires,
     )
+    log.info("Uploaded key=%s size=%d type=%s", key, len(data), content_type)
+    log.info("Image URL: %s", url)
     return ImageItem(key=key, filename=filename, size=len(data), last_modified=stamp, url=url)
 
 
