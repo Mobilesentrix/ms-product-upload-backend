@@ -10,11 +10,14 @@ from app.config import get_settings
 from app.routers import health, skus, uploads
 from app.storage import ensure_bucket
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("upload-api")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    s = get_settings()
+    log.info("Storage endpoint=%s bucket=%s region=%s", s.s3_public_endpoint, s.s3_bucket, s.s3_region)
     if get_settings().create_bucket:
         try:
             ensure_bucket()
