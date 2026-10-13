@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.config import get_settings
 from app.schemas import ImageItem, ImageList, SkuDeleted, SkuInfo, SkuList, SkuPath, SkuSummary
-from app.storage import s3_client, sku_prefix
+from app.storage import image_url, s3_client, sku_prefix
 
 router = APIRouter(prefix="/skus", tags=["skus"])
 log = logging.getLogger("upload-api")
@@ -16,17 +16,6 @@ def _list_objects(prefix: str) -> list[dict]:
     for page in paginator.paginate(Bucket=get_settings().s3_bucket, Prefix=prefix):
         objects.extend(page.get("Contents", []))
     return objects
-
-
-def _view_url(key: str) -> str:
-    s = get_settings()
-    url = s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": s.s3_bucket, "Key": key},
-        ExpiresIn=s.view_url_expires,
-    )
-    log.info("Image URL for key=%s: %s", key, url)
-    return url
 
 
 @router.get("", response_model=SkuList)
@@ -47,14 +36,13 @@ def list_skus(
         if sku not in latest or obj["LastModified"] > latest[sku]["LastModified"]:
             latest[sku] = obj
 
-    # Sort and slice first so only the returned page gets signed URLs.
     ordered = sorted(latest.items(), key=lambda kv: kv[1]["LastModified"], reverse=True)
     page = [
         SkuSummary(
             sku=sku,
             image_count=counts[sku],
             last_uploaded=obj["LastModified"],
-            cover_url=_view_url(obj["Key"]),
+            cover_url=image_url(obj["Key"]),
         )
         for sku, obj in ordered[offset : offset + limit]
     ]
@@ -63,7 +51,6 @@ def list_skus(
 
 @router.get("/{sku}", response_model=SkuInfo)
 def get_sku(sku: SkuPath) -> SkuInfo:
-    sku = sku.upper()
     count = len(_list_objects(sku_prefix(sku)))
     return SkuInfo(sku=sku, exists=count > 0, image_count=count)
 
@@ -71,7 +58,6 @@ def get_sku(sku: SkuPath) -> SkuInfo:
 @router.get("/{sku}/images", response_model=ImageList)
 def list_images(sku: SkuPath) -> ImageList:
     """All images of one SKU, newest first."""
-    sku = sku.upper()
     objects = sorted(_list_objects(sku_prefix(sku)), key=lambda o: o["LastModified"], reverse=True)
     images = [
         ImageItem(
@@ -79,7 +65,7 @@ def list_images(sku: SkuPath) -> ImageList:
             filename=o["Key"].rsplit("/", 1)[-1],
             size=o["Size"],
             last_modified=o["LastModified"],
-            url=_view_url(o["Key"]),
+            url=image_url(o["Key"]),
         )
         for o in objects
     ]
@@ -89,7 +75,6 @@ def list_images(sku: SkuPath) -> ImageList:
 @router.delete("/{sku}", response_model=SkuDeleted)
 def delete_sku(sku: SkuPath) -> SkuDeleted:
     """Delete a SKU and all of its images."""
-    sku = sku.upper()
     keys = [o["Key"] for o in _list_objects(sku_prefix(sku))]
     if not keys:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "SKU not found")

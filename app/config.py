@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     s3_public_endpoint: str
 
     upload_prefix: str = "uploads"
-    view_url_expires: int = 3600
+    api_base_url: str = ""
     max_upload_bytes: int = 10 * 1024 * 1024
     allowed_content_types: list[str] = ["image/jpeg", "image/png"]
 

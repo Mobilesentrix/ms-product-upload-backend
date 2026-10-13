@@ -28,6 +28,12 @@ def sku_prefix(sku: str) -> str:
     return f"{get_settings().upload_prefix}/{sku}/"
 
 
+def image_url(key: str) -> str:
+    """Link to view an image through this API (GET /skus/{sku}/images/{filename})."""
+    sku, filename = key.rsplit("/", 2)[-2:]
+    return f"{get_settings().api_base_url.rstrip('/')}/skus/{sku}/images/{filename}"
+
+
 def ensure_bucket() -> None:
     s3 = s3_client()
     bucket = get_settings().s3_bucket
