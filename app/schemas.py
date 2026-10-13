@@ -9,6 +9,11 @@ SkuPath = Annotated[
     Path(pattern=r"^[A-Za-z0-9_-]{1,64}$", description="Product SKU (letters, digits, - and _)"),
 ]
 
+FilenamePath = Annotated[
+    str,
+    Path(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$", description="Image file name"),
+]
+
 
 class SkuInfo(BaseModel):
     sku: str

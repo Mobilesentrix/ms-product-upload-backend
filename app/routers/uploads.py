@@ -3,12 +3,13 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, File, HTTPException, Path, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
-from app.schemas import ImageItem, SkuPath
-from app.storage import s3_client, sku_prefix
+from app.schemas import FilenamePath, ImageItem, SkuPath
+from app.storage import image_url, s3_client, sku_prefix
 
 router = APIRouter(prefix="/skus", tags=["images"])
 log = logging.getLogger("upload-api")
@@ -27,11 +28,14 @@ def _detect_type(data: bytes) -> tuple[str, str] | None:
     return None
 
 
+def _is_not_found(e: ClientError) -> bool:
+    return e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound")
+
+
 @router.post("/{sku}/images", response_model=ImageItem, status_code=status.HTTP_201_CREATED)
 async def upload_image(sku: SkuPath, file: UploadFile = File(..., description="JPEG or PNG image")) -> ImageItem:
     """Upload one image for a SKU as multipart/form-data (field name: `file`)."""
     s = get_settings()
-    sku = sku.upper()
 
     data = await file.read(s.max_upload_bytes + 1)
     if not data:
@@ -59,25 +63,41 @@ async def upload_image(sku: SkuPath, file: UploadFile = File(..., description="J
         s3_client().put_object, Bucket=s.s3_bucket, Key=key, Body=data, ContentType=content_type
     )
 
-    url = s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": s.s3_bucket, "Key": key},
-        ExpiresIn=s.view_url_expires,
-    )
     log.info("Uploaded key=%s size=%d type=%s", key, len(data), content_type)
-    log.info("Image URL: %s", url)
-    return ImageItem(key=key, filename=filename, size=len(data), last_modified=stamp, url=url)
+    return ImageItem(key=key, filename=filename, size=len(data), last_modified=stamp, url=image_url(key))
+
+
+@router.get("/{sku}/images/{filename}", response_class=StreamingResponse)
+def get_image(sku: SkuPath, filename: FilenamePath) -> StreamingResponse:
+    """Image file, read from storage by the API and streamed to the client."""
+    s = get_settings()
+    key = f"{sku_prefix(sku)}{filename}"
+    try:
+        obj = s3_client().get_object(Bucket=s.s3_bucket, Key=key)
+    except ClientError as e:
+        if _is_not_found(e):
+            log.info("Image not found key=%s", key)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found") from None
+        raise
+    return StreamingResponse(
+        obj["Body"].iter_chunks(64 * 1024),
+        media_type=obj.get("ContentType", "application/octet-stream"),
+        headers={
+            "Content-Length": str(obj["ContentLength"]),
+            "Cache-Control": "private, max-age=86400",
+        },
+    )
 
 
 @router.delete("/{sku}/images/{filename}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_image(sku: SkuPath, filename: str = Path(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")) -> None:
+def delete_image(sku: SkuPath, filename: FilenamePath) -> None:
     s = get_settings()
-    key = f"{sku_prefix(sku.upper())}{filename}"
+    key = f"{sku_prefix(sku)}{filename}"
     s3 = s3_client()
     try:
         s3.head_object(Bucket=s.s3_bucket, Key=key)
     except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+        if _is_not_found(e):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found") from None
         raise
     s3.delete_object(Bucket=s.s3_bucket, Key=key)
